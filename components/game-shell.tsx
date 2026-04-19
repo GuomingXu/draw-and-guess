@@ -7,7 +7,12 @@ import GuessPanel from "@/components/guess-panel";
 import PlayerList from "@/components/player-list";
 import RoundResult from "@/components/round-result";
 import { getSocket } from "@/lib/socket/client";
-import type { GameSnapshot, PlayerIdentity, Stroke } from "@/lib/game/types";
+import type {
+  ClientStrokeInput,
+  GameSnapshot,
+  PlayerIdentity,
+  Stroke,
+} from "@/lib/game/types";
 
 export default function GameShell() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
@@ -108,8 +113,8 @@ export default function GameShell() {
     getSocket().emit("guess:submit", { text });
   };
 
-  const handleStroke = (stroke: { points: { x: number; y: number }[] }) => {
-    getSocket().emit("draw:stroke", stroke);
+  const handleStroke = (stroke: ClientStrokeInput) => {
+    getSocket().volatile.emit("draw:stroke", stroke);
   };
 
   return (

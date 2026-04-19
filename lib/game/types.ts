@@ -1,9 +1,7 @@
 export type GamePhase =
   | "waiting"
-  | "round_announce"
   | "drawing"
-  | "guessing"
-  | "round_end";
+  | "guessing";
 
 export type RoundEndReason = "completed" | "drawer_disconnected";
 
@@ -13,11 +11,13 @@ export interface Point {
 }
 
 export interface ClientStrokeInput {
+  clientStrokeId: string;
   points: Point[];
 }
 
 export interface Stroke {
   id: string;
+  clientStrokeId: string;
   playerId: string;
   points: Point[];
   color: string;
@@ -57,7 +57,6 @@ export interface GameSnapshot {
   players: PlayerSummary[];
   strokes: Stroke[];
   yourSecretWord: string | null;
-  revealedWord: string | null;
   lastRoundResult: RoundResult | null;
 }
 

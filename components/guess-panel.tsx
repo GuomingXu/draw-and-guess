@@ -34,10 +34,6 @@ export default function GuessPanel({
         : `Waiting for at least ${minPlayers} players.`;
     }
 
-    if (phase === "round_announce") {
-      return "Get ready. The next round is about to begin.";
-    }
-
     if (phase === "drawing") {
       return isDrawer
         ? "Draw without words or numbers."
@@ -50,7 +46,7 @@ export default function GuessPanel({
         : "Submit your best guess before time runs out.";
     }
 
-    return "Scores are updating. The next round will wait for a manual start.";
+    return "The round is in progress.";
   }, [connectedPlayerCount, isDrawer, minPlayers, phase]);
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {

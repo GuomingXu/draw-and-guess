@@ -1,10 +1,8 @@
 export const MIN_PLAYERS = 3;
 
 export const PHASE_DURATIONS_MS = {
-  roundAnnounce: 3_000,
-  drawing: 20_000,
-  guessing: 20_000,
-  roundEnd: 5_000,
+  drawing: 15_000,
+  guessing: 15_000,
 } as const;
 
 export const SCORE_VALUES = {
