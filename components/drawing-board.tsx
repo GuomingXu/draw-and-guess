@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 
 import { CANVAS } from "@/lib/game/constants";
-import type { ClientStrokeInput, GamePhase, Stroke } from "@/lib/game/types";
+import type {
+  ClientStrokeInput,
+  GamePhase,
+  Point,
+  Stroke,
+} from "@/lib/game/types";
+
+const STROKE_FLUSH_INTERVAL_MS = 33;
 
 interface DrawingBoardProps {
   strokes: Stroke[];
@@ -27,6 +34,10 @@ export default function DrawingBoard({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
   const previousPointRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingStrokePointsRef = useRef<Point[]>([]);
+  const flushTimerRef = useRef<number | null>(null);
+  const renderedStrokeIdsRef = useRef<string[]>([]);
+  const optimisticStrokeIdsRef = useRef<Set<string>>(new Set());
 
   const canvasCursor = useMemo(() => {
     if (isFrozen || !isActiveDrawer) {
@@ -37,26 +48,47 @@ export default function DrawingBoard({
   }, [isActiveDrawer, isFrozen]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-
-    if (!canvas) {
-      return;
-    }
-
-    const context = canvas.getContext("2d");
+    const context = getCanvasContext(canvasRef.current);
 
     if (!context) {
       return;
     }
 
-    context.clearRect(0, 0, CANVAS.width, CANVAS.height);
-    context.lineCap = "round";
-    context.lineJoin = "round";
+    const previousRenderedStrokeIds = renderedStrokeIdsRef.current;
+    const requiresFullRedraw =
+      strokes.length < previousRenderedStrokeIds.length ||
+      previousRenderedStrokeIds.some((strokeId, index) => strokes[index]?.id !== strokeId);
 
-    for (const stroke of strokes) {
-      drawStroke(context, stroke);
+    if (requiresFullRedraw) {
+      context.clearRect(0, 0, CANVAS.width, CANVAS.height);
+
+      for (const stroke of strokes) {
+        if (optimisticStrokeIdsRef.current.has(stroke.clientStrokeId)) {
+          optimisticStrokeIdsRef.current.delete(stroke.clientStrokeId);
+          continue;
+        }
+
+        drawStroke(context, stroke);
+      }
+    } else {
+      for (const stroke of strokes.slice(previousRenderedStrokeIds.length)) {
+        if (optimisticStrokeIdsRef.current.has(stroke.clientStrokeId)) {
+          optimisticStrokeIdsRef.current.delete(stroke.clientStrokeId);
+          continue;
+        }
+
+        drawStroke(context, stroke);
+      }
     }
+
+    renderedStrokeIdsRef.current = strokes.map((stroke) => stroke.id);
   }, [strokes]);
+
+  useEffect(() => {
+    return () => {
+      clearScheduledFlush(flushTimerRef);
+    };
+  }, []);
 
   const getCanvasPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -75,7 +107,10 @@ export default function DrawingBoard({
     }
 
     drawingRef.current = true;
-    previousPointRef.current = getCanvasPoint(event);
+    const startPoint = getCanvasPoint(event);
+    previousPointRef.current = startPoint;
+    pendingStrokePointsRef.current = [startPoint];
+    event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -91,30 +126,38 @@ export default function DrawingBoard({
       return;
     }
 
-    const segment = {
-      points: [previousPoint, nextPoint],
-    };
-
-    const context = canvasRef.current?.getContext("2d");
+    const context = getCanvasContext(canvasRef.current);
 
     if (context) {
       drawStroke(context, {
-        id: "local",
-        playerId: "local",
-        points: segment.points,
+        id: "local-preview",
+        clientStrokeId: "local-preview",
+        playerId: "local-preview",
+        points: [previousPoint, nextPoint],
         color: CANVAS.strokeColor,
         width: CANVAS.strokeWidth,
         createdAt: Date.now(),
       });
     }
 
-    onStroke(segment);
+    pendingStrokePointsRef.current.push(nextPoint);
+    scheduleStrokeFlush(flushTimerRef, pendingStrokePointsRef, optimisticStrokeIdsRef, onStroke);
     previousPointRef.current = nextPoint;
   };
 
-  const finishStroke = () => {
+  const finishStroke = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) {
+      return;
+    }
+
     drawingRef.current = false;
     previousPointRef.current = null;
+    flushPendingStroke(pendingStrokePointsRef, flushTimerRef, optimisticStrokeIdsRef, onStroke);
+    pendingStrokePointsRef.current = [];
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   return (
@@ -160,11 +203,75 @@ export default function DrawingBoard({
         onPointerMove={handlePointerMove}
         onPointerUp={finishStroke}
         onPointerLeave={finishStroke}
+        onPointerCancel={finishStroke}
         className="h-auto w-full touch-none rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)]"
         style={{ cursor: canvasCursor, aspectRatio: `${CANVAS.width} / ${CANVAS.height}` }}
       />
     </section>
   );
+}
+
+function getCanvasContext(canvas: HTMLCanvasElement | null) {
+  const context = canvas?.getContext("2d");
+
+  if (!context) {
+    return null;
+  }
+
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  return context;
+}
+
+function scheduleStrokeFlush(
+  flushTimerRef: MutableRefObject<number | null>,
+  pendingStrokePointsRef: MutableRefObject<Point[]>,
+  optimisticStrokeIdsRef: MutableRefObject<Set<string>>,
+  onStroke: (stroke: ClientStrokeInput) => void,
+) {
+  if (flushTimerRef.current !== null) {
+    return;
+  }
+
+  flushTimerRef.current = window.setTimeout(() => {
+    flushPendingStroke(
+      pendingStrokePointsRef,
+      flushTimerRef,
+      optimisticStrokeIdsRef,
+      onStroke,
+      true,
+    );
+  }, STROKE_FLUSH_INTERVAL_MS);
+}
+
+function flushPendingStroke(
+  pendingStrokePointsRef: MutableRefObject<Point[]>,
+  flushTimerRef: MutableRefObject<number | null>,
+  optimisticStrokeIdsRef: MutableRefObject<Set<string>>,
+  onStroke: (stroke: ClientStrokeInput) => void,
+  keepTrailingPoint = false,
+) {
+  clearScheduledFlush(flushTimerRef);
+
+  const points = pendingStrokePointsRef.current;
+
+  if (points.length >= 2) {
+    const clientStrokeId = crypto.randomUUID();
+    optimisticStrokeIdsRef.current.add(clientStrokeId);
+    onStroke({ clientStrokeId, points });
+  }
+
+  const trailingPoint = points.at(-1);
+
+  pendingStrokePointsRef.current =
+    keepTrailingPoint && trailingPoint ? [trailingPoint] : [];
+}
+
+function clearScheduledFlush(flushTimerRef: MutableRefObject<number | null>) {
+  if (flushTimerRef.current !== null) {
+    window.clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = null;
+  }
 }
 
 function drawStroke(context: CanvasRenderingContext2D, stroke: Stroke) {

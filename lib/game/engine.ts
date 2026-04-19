@@ -96,11 +96,7 @@ export class GameEngine {
       return;
     }
 
-    if (
-      wasDrawer &&
-      this.phase !== "waiting" &&
-      this.phase !== "round_end"
-    ) {
+    if (wasDrawer && this.phase !== "waiting") {
       this.finishRound("drawer_disconnected");
       return;
     }
@@ -139,6 +135,7 @@ export class GameEngine {
 
     const stroke: Stroke = {
       id: randomUUID(),
+      clientStrokeId: input.clientStrokeId,
       playerId,
       points: input.points,
       color: CANVAS.strokeColor,
@@ -196,7 +193,7 @@ export class GameEngine {
     const showPrivateWord =
       viewerId === this.round.drawerId &&
       this.round.secretWord !== null &&
-      this.phase !== "round_end";
+      this.phase !== "waiting";
 
     return {
       selfId: viewerId,
@@ -210,8 +207,6 @@ export class GameEngine {
       players,
       strokes: [...this.round.strokes],
       yourSecretWord: showPrivateWord ? this.round.secretWord : null,
-      revealedWord:
-        this.phase === "round_end" ? this.round.secretWord : null,
       lastRoundResult: this.lastRoundResult,
     };
   }
@@ -244,8 +239,6 @@ export class GameEngine {
     const secretWord = pickRandomWord();
 
     this.roundNumber += 1;
-    this.phase = "round_announce";
-    this.phaseEndsAt = Date.now() + PHASE_DURATIONS_MS.roundAnnounce;
     this.round = {
       drawerId,
       secretWord,
@@ -255,11 +248,12 @@ export class GameEngine {
     };
     this.lastRoundResult = null;
     this.lastDrawerId = drawerId;
-
+    this.phase = "drawing";
+    this.phaseEndsAt = Date.now() + PHASE_DURATIONS_MS.drawing;
     this.emit({ type: "state_changed" });
     this.schedulePhaseTransition(
-      PHASE_DURATIONS_MS.roundAnnounce,
-      () => this.enterDrawingPhase(),
+      PHASE_DURATIONS_MS.drawing,
+      () => this.enterGuessingPhase(),
     );
   }
 
@@ -284,20 +278,6 @@ export class GameEngine {
     return this.players[nextIndex].id;
   }
 
-  private enterDrawingPhase(): void {
-    if (this.phase !== "round_announce") {
-      return;
-    }
-
-    this.phase = "drawing";
-    this.phaseEndsAt = Date.now() + PHASE_DURATIONS_MS.drawing;
-    this.emit({ type: "state_changed" });
-    this.schedulePhaseTransition(
-      PHASE_DURATIONS_MS.drawing,
-      () => this.enterGuessingPhase(),
-    );
-  }
-
   private enterGuessingPhase(): void {
     if (this.phase !== "drawing") {
       return;
@@ -313,25 +293,19 @@ export class GameEngine {
   }
 
   private finishRound(endedBecause: RoundEndReason): void {
-    if (this.phase === "waiting" || this.phase === "round_end") {
+    if (this.phase === "waiting") {
       return;
     }
 
     this.clearTimer();
     this.applyRoundScoring();
-    this.phase = "round_end";
-    this.phaseEndsAt = Date.now() + PHASE_DURATIONS_MS.roundEnd;
     this.lastRoundResult = {
       word: this.round.secretWord ?? "",
       drawerId: this.round.drawerId,
       correctGuesserIds: [...this.round.correctGuesserIds],
       endedBecause,
     };
-    this.emit({ type: "state_changed" });
-
-    this.schedulePhaseTransition(PHASE_DURATIONS_MS.roundEnd, () => {
-      this.resetToWaiting({ preserveLastRoundResult: true });
-    });
+    this.resetToWaiting({ preserveLastRoundResult: true });
   }
 
   private applyRoundScoring(): void {
