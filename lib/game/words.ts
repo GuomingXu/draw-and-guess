@@ -1,0 +1,36 @@
+const WORDS = [
+  "keyboard",
+  "coffee mug",
+  "calendar",
+  "headphones",
+  "meeting room",
+  "sticky note",
+  "spreadsheet",
+  "office chair",
+  "backpack",
+  "notebook",
+  "water bottle",
+  "presentation",
+  "mailbox",
+  "wifi",
+  "camera",
+  "light bulb",
+  "microphone",
+  "whiteboard",
+  "rocket",
+  "trophy",
+  "sandwich",
+  "umbrella",
+  "train",
+  "airplane",
+  "sunflower",
+  "snowman",
+  "pizza",
+  "guitar",
+  "volcano",
+  "rainbow",
+];
+
+export function pickRandomWord(): string {
+  return WORDS[Math.floor(Math.random() * WORDS.length)];
+}
